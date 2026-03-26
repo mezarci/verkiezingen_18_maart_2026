@@ -1,20 +1,23 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import os
 
 st.set_page_config(page_title="Uitslagen Den Haag 2026", layout="wide")
+
+# Check of bestanden bestaan om errors te voorkomen
+if not os.path.exists('cleaned_election_data.csv') or not os.path.exists('station_info.csv'):
+    st.error("⚠️ Fout: Data bestanden niet gevonden op GitHub! Zorg dat 'cleaned_election_data.csv' en 'station_info.csv' in dezelfde map staan.")
+    st.stop()
 
 @st.cache_data
 def load_and_clean_final():
     df = pd.read_csv('cleaned_election_data.csv')
     stations = pd.read_csv('station_info.csv')
-    
-    # Voeg postcode informatie toe aan de hoofd-dataset
     df = df.merge(stations[['Polling Station', 'Postcode']], on='Polling Station', how='left')
     
     def postcode_naar_wijk(pc_str):
         try:
-            # Pak de eerste 4 cijfers van de postcode (bijv. 2511)
             pc = int(str(pc_str)[:4])
             if 2511 <= pc <= 2518: return 'Centrum'
             if 2519 <= pc <= 2525: return 'Schilderswijk / Centrum'
@@ -35,66 +38,45 @@ def load_and_clean_final():
 
 df = load_and_clean_final()
 
-# --- SIDEBAR MET DYNAMISCHE FILTERS ---
+# --- SIDEBAR ---
 st.sidebar.title("🔍 Selectie")
-
-# 1. Partij filter
 partijen = sorted(df['Party'].unique())
-selected_party = st.sidebar.selectbox("Stap 1: Kies een Partij", ["Alle"] + partijen)
+selected_party = st.sidebar.selectbox("1. Kies een Partij", ["Alle"] + partijen)
 
-# 2. Dynamische Kandidaat filter (afhankelijk van partij)
+# Dynamische kandidatenlijst
 if selected_party != "Alle":
     kandidaat_opties = sorted(df[df['Party'] == selected_party]['Candidate'].unique())
 else:
     kandidaat_opties = sorted(df['Candidate'].unique())
 
-selected_candidate = st.sidebar.selectbox("Stap 2: Kies een Kandidaat", kandidaat_opties)
+selected_candidate = st.sidebar.selectbox("2. Kies een Kandidaat", kandidaat_opties)
 
-# 3. Wijk filter
 wijken = sorted(df['Wijk'].unique())
-selected_wijken = st.sidebar.multiselect("Stap 3: Filter op Wijk(en)", wijken, default=wijken)
+selected_wijken = st.sidebar.multiselect("3. Filter op Wijk(en)", wijken, default=wijken)
 
-# Toepassen van filters op de dataset
 filtered_df = df[df['Wijk'].isin(selected_wijken)]
 if selected_party != "Alle":
     filtered_df = filtered_df[filtered_df['Party'] == selected_party]
 
-# --- DASHBOARD LAYOUT ---
-st.title(f"🗳️ Analyse: {selected_party if selected_party != 'Alle' else 'Alle Partijen'}")
+# --- DASHBOARD ---
+st.title(f"🗳️ Analyse: {selected_party}")
 
-tab_overzicht, tab_kandidaat = st.tabs(["📊 Wijkoverzicht", "👤 Kandidaat Detail"])
+tab1, tab2 = st.tabs(["📊 Wijkoverzicht", "👤 Kandidaat Detail"])
 
-with tab_overzicht:
-    st.subheader("Stemmenverdeling per Wijk")
-    
-    # Aggregeren voor grafiek
+with tab1:
     wijk_data = filtered_df.groupby(['Wijk', 'Party'])['Votes'].sum().reset_index()
-    
-    fig = px.bar(wijk_data, x='Wijk', y='Votes', color='Party', 
-                 title="Totaal aantal stemmen per wijk (gefilterd)",
-                 barmode='stack', height=500)
+    fig = px.bar(wijk_data, x='Wijk', y='Votes', color='Party', barmode='stack')
     st.plotly_chart(fig, use_container_width=True)
     
-    # Tabel met exacte cijfers
-    pivot_table = wijk_data.pivot(index='Party', columns='Wijk', values='Votes').fillna(0).astype(int)
-    st.write("### Exacte aantallen per wijk", pivot_table)
+    pivot = wijk_data.pivot(index='Party', columns='Wijk', values='Votes').fillna(0).astype(int)
+    st.write("### Cijfers per wijk", pivot)
 
-with tab_kandidaat:
-    # Hier focussen we op de geselecteerde kandidaat uit de sidebar
+with tab2:
     cand_detail = df[df['Candidate'] == selected_candidate]
+    st.header(f"Rapport: {selected_candidate}")
+    col1, col2 = st.columns(2)
+    col1.metric("Totaal stemmen", f"{cand_detail['Votes'].sum():,}")
+    col2.metric("Partij", cand_detail['Party'].iloc[0])
     
-    st.header(f"Rapportage: {selected_candidate}")
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Totaal stemmen", f"{cand_detail['Votes'].sum():,}")
-    c2.metric("Partij", cand_detail['Party'].iloc[0])
-    c3.metric("Hoofdkwartier (Beste Wijk)", cand_detail.groupby('Wijk')['Votes'].sum().idxmax())
-    
-    # Grafiek voor kandidaat
-    st.subheader("Waar kwamen de stemmen vandaan?")
-    fig_cand = px.bar(cand_detail.groupby('Wijk')['Votes'].sum().reset_index(), 
-                       x='Wijk', y='Votes', color='Wijk', title=f"Spreiding {selected_candidate}")
+    fig_cand = px.bar(cand_detail.groupby('Wijk')['Votes'].sum().reset_index(), x='Wijk', y='Votes')
     st.plotly_chart(fig_cand, use_container_width=True)
-    
-    st.subheader("Top stembureaus voor deze kandidaat")
-    st.dataframe(cand_detail.sort_values('Votes', ascending=False)[['Polling Station', 'Wijk', 'Votes']].head(15))
